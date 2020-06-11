@@ -311,7 +311,6 @@ func doAsyncProxyRequest(w http.ResponseWriter, proxyRequest *http.Request, inse
 		}()
 
 		// Do the request
-		var httpClient http.Client
 		if insecureSkipVerify {
 			httpClient.Transport = &http.Transport{
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
