@@ -1,4 +1,4 @@
-module github.com/btbd/proxy
+module github.com/ibm-functions/cos-proxy
 
 go 1.14
 
