@@ -18,12 +18,7 @@ RUN go mod download
 COPY main.go .
 RUN CGO_ENABLED=0 go build -ldflags "-w -extldflags -static" -tags netgo -installsuffix netgo -o ./proxy
 
-FROM golang:${GOLANG_VERSION}
-
-RUN apt-get update && apt-get upgrade -y
-
-# Remove CURL and git as it is has constant security vulnerabilities and we don't use it
-RUN apt-get purge -y --auto-remove curl git
+FROM registry.access.redhat.com/ubi8/ubi-minimal:latest
 
 COPY --from=build /workspace/cos/proxy .
 ENTRYPOINT [ "./proxy" ]
