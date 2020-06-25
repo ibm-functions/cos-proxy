@@ -3,11 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -25,6 +25,11 @@ import (
 	"k8s.io/client-go/rest"
 )
 
+const (
+	timeout             = 10 * time.Minute // Max round-trip time for request
+	tlsHandshakeTimeout = 10 * time.Second // Time to wait for TLS handshake
+)
+
 // ProxyName is the name of the proxy's pod
 var ProxyName = os.Getenv("POD_NAME")
 
@@ -38,6 +43,8 @@ var ProxyStatefulSet = os.Getenv("POD_STATEFULSET")
 var ProxyOrdinal = getProxyOrdinal(ProxyName)
 
 var kubeClient *kubernetes.Clientset
+
+var httpClient http.Client
 
 // Info of StatefulSet
 var proxies struct {
@@ -302,14 +309,6 @@ func doAsyncProxyRequest(w http.ResponseWriter, proxyRequest *http.Request, inse
 			debugPrint(3, "[<] Active requests: %v", state.ActiveRequests)
 		}()
 
-		// Do the request
-		var httpClient http.Client
-		if insecureSkipVerify {
-			httpClient.Transport = &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			}
-		}
-
 		requestResponse, requestError = httpClient.Do(proxyRequest)
 
 		// Was there no error?
@@ -375,6 +374,7 @@ func doAsyncProxyRequest(w http.ResponseWriter, proxyRequest *http.Request, inse
 
 // Starts the HTTP server
 func startServer() {
+	setUpClient()
 	http.HandleFunc(config.HTTP.Path, httpHandler)
 
 	debugPrint(1, "[+] Listening on port %v (path \"%v\")", config.HTTP.Port, config.HTTP.Path)
@@ -749,4 +749,14 @@ func main() {
 	printStats()
 
 	startServer()
+}
+
+func setUpClient() {
+	netHTTPTransport := &http.Transport{
+		TLSHandshakeTimeout: tlsHandshakeTimeout,
+		DialContext: (&net.Dialer{
+			Timeout: timeout,
+		}).DialContext,
+	}
+	httpClient.Transport = netHTTPTransport
 }
