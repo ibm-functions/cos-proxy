@@ -321,10 +321,10 @@ func doAsyncProxyRequest(w http.ResponseWriter, proxyRequest *http.Request, inse
 			} else {
 				requestError = err
 
-				debugPrint(2, "[!] Failed to read request to %v response body from: %v", proxyRequest.URL.String(), requestError)
+				debugPrint(1, "[!] Failed to read request to %v response body from: %v", proxyRequest.URL.String(), requestError)
 			}
 		} else {
-			debugPrint(2, "[!] Request to %v failed: %v", proxyRequest.URL.String(), requestError)
+			debugPrint(1, "[!] Request to %v failed: %v", proxyRequest.URL.String(), requestError)
 		}
 
 		// We did not timeout, request finished
@@ -724,15 +724,15 @@ func startWatcher() {
 
 // Prints periodic stats
 func printStats() {
-	debugPrint(1, "[+] Name:        %s", ProxyName)
-	debugPrint(1, "[+] Namespace:   %s", ProxyNamespace)
-	debugPrint(1, "[+] StatefulSet: %s", ProxyStatefulSet)
+	debugPrint(2, "[+] Name:        %s", ProxyName)
+	debugPrint(2, "[+] Namespace:   %s", ProxyNamespace)
+	debugPrint(2, "[+] StatefulSet: %s", ProxyStatefulSet)
 
 	go func() {
 		for {
 			time.Sleep(2 * time.Second)
 
-			debugPrint(1, "[+] P:%-3v Max:%-4v Target:%-4v Deny:%-7v Active:%v",
+			debugPrint(2, "[+] P:%-3v Max:%-4v Target:%-4v Deny:%-7v Active:%v",
 				proxies.Count,
 				config.MaxRequests,
 				int(float64(config.MaxRequests)*config.MaxLoadFactor),
@@ -746,7 +746,9 @@ func main() {
 	startWatcher()
 	setupIdleShutdown()
 
-	printStats()
+	if config.DebugLevel > 1 {
+		printStats()
+	}
 
 	startServer()
 }
