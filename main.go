@@ -323,6 +323,10 @@ func doAsyncProxyRequest(w http.ResponseWriter, proxyRequest *http.Request, inse
 
 				debugPrint(1, "[!] Failed to read request to %v response body from: %v", proxyRequest.URL.String(), requestError)
 			}
+			//log errors when request does not reach adapter or sink
+			if requestResponse.StatusCode >= 400 && requestResponse.StatusCode <= 599 {
+				debugPrint(1, "[!] Request to %v failed: %d", proxyRequest.URL.String(), requestResponse.StatusCode)
+			}
 		} else {
 			debugPrint(1, "[!] Request to %v failed: %v", proxyRequest.URL.String(), requestError)
 		}
