@@ -20,5 +20,7 @@ RUN CGO_ENABLED=0 go build -ldflags "-w -extldflags -static" -tags netgo -instal
 
 FROM registry.access.redhat.com/ubi8/ubi-minimal:latest
 
+RUN microdnf update -y
+
 COPY --from=build /workspace/cos/proxy .
 ENTRYPOINT [ "./proxy" ]
