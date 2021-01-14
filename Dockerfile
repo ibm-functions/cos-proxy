@@ -15,12 +15,12 @@ COPY go.mod .
 COPY go.sum .
 RUN go mod download
 
-COPY main.go .
-RUN CGO_ENABLED=0 go build -ldflags "-w -extldflags -static" -tags netgo -installsuffix netgo -o ./proxy
+COPY . .
+RUN CGO_ENABLED=0 go build -ldflags "-w -extldflags -static" -tags netgo -installsuffix netgo .
 
 FROM registry.access.redhat.com/ubi8/ubi-minimal:latest
 
 RUN microdnf update -y
 
-COPY --from=build /workspace/cos/proxy .
-ENTRYPOINT [ "./proxy" ]
+COPY --from=build /workspace/cos/cos-proxy /cos-proxy
+CMD ["/cos-proxy"]
