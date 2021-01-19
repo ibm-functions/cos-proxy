@@ -3,6 +3,8 @@ package redis
 import (
 	"crypto/tls"
 	"github.com/gomodule/redigo/redis"
+	"github.com/ibm-functions/cos-proxy/logger"
+	"go.uber.org/zap"
 	"time"
 )
 
@@ -12,6 +14,7 @@ const (
 
 type Redis struct {
 	pool     *redis.Pool
+	logger   *logger.Logger
 	redisKey string
 }
 
@@ -40,6 +43,7 @@ func initializeRedis() (*Redis, error) {
 	}
 
 	r := &Redis{}
+	r.logger = logger.GetLogger()
 	r.redisKey = config.RedisKey
 	redisURL := config.RedisURL
 	tlsConfig := &tls.Config{InsecureSkipVerify: true}
@@ -49,21 +53,21 @@ func initializeRedis() (*Redis, error) {
 		Dial: func() (redis.Conn, error) {
 			c, err := redis.DialURL(redisURL, redis.DialTLSConfig(tlsConfig))
 			if err != nil {
-				//r.logger.Error("Redis dial failed.", zap.Error(err))
+				r.logger.Error("Redis dial failed.", zap.Error(err))
 				return nil, err
 			}
 
-			//r.logger.Info("Redis connection established.",
-			//	zap.Int("active", r.pool.ActiveCount()),
-			//	zap.Int("idle", r.pool.IdleCount()))
+			r.logger.Info("Redis connection established.",
+				zap.Int("active", r.pool.ActiveCount()),
+				zap.Int("idle", r.pool.IdleCount()))
 			return c, err
 		},
 		MaxActive: 1000,
 		TestOnBorrow: func(c redis.Conn, t time.Time) error {
 			_, err := c.Do("PING")
-			//if err != nil {
-			//r.logger.Error("Redis TestOnBorrow() failed.", zap.Error(err))
-			//}
+			if err != nil {
+				r.logger.Error("Redis TestOnBorrow() failed.", zap.Error(err))
+			}
 			return err
 		},
 		Wait: true,
