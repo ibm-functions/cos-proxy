@@ -336,14 +336,18 @@ func (p *Proxy) httpHandler(w http.ResponseWriter, r *http.Request) {
 			atomic.AddInt64(&state.ActiveRequests, -1)
 		}()
 
+		p.logger.Debug("Sending event to adapter...",
+			zap.String("notificationId", cosMsgKey.NotificationId),
+			zap.String("recipient", retryEntry.Recipient),
+			zap.String("requestId", cosMsgKey.RequestId))
+
 		//post event message to COS adapter
 		res, body, err := p.doRequest(proxyRequest)
 		if err != nil {
-			p.logger.Debug("COS adapter post error.",
+			p.logger.Error("COS adapter post error.",
 				zap.String("notificationId", cosMsgKey.NotificationId),
 				zap.String("recipient", retryEntry.Recipient),
 				zap.String("requestId", cosMsgKey.RequestId),
-				zap.Int("retries", retryEntry.Retries),
 				zap.Error(err))
 		} else if shouldRetry(res.StatusCode) {
 			p.logAdapterResponse(false, retryEntry, cosMsgKey, string(body), res.StatusCode)
@@ -484,8 +488,7 @@ func (p *Proxy) logAdapterResponse(isError bool, retryEntry *RetryEntry, cosMsgK
 			zap.Int("statusCode", statusCode),
 			zap.String("notificationId", cosMsgKey.NotificationId),
 			zap.String("recipient", retryEntry.Recipient),
-			zap.String("requestId", cosMsgKey.RequestId),
-			zap.Int("retries", retryEntry.Retries))
+			zap.String("requestId", cosMsgKey.RequestId))
 	} else {
 		p.logger.Debug("COS adapter response retry code.",
 			zap.String("reason", reason),
