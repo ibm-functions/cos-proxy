@@ -53,16 +53,16 @@ type RetryCache interface {
 }
 
 type RetryEntry struct {
-	Recipient     string    `json:"recipient"`
-	Origination   int64     `json:"origination"`
-	MsgKey        CosMsgKey `json:"msgKey"`
-	MsgValue      []byte    `json:"msgValue"`
-	NextRetryTime int64     `json:"nextRetryTime"`
-	Retries       int       `json:"retries"`
+	Recipient     string `json:"recipient"`
+	Origination   int64  `json:"origination"`
+	MsgKey        []byte `json:"msgKey"`
+	MsgValue      []byte `json:"msgValue"`
+	NextRetryTime int64  `json:"nextRetryTime"`
+	Retries       int    `json:"retries"`
 }
 
 type CosPayload struct {
-	Notification []byte `json:"notification"`
+	Notification json.RawMessage `json:"notification"`
 }
 
 type CosMsgKey struct {
@@ -156,33 +156,6 @@ func (p *Proxy) StartProxy() error {
 	return err
 }
 
-// Sets up the idle shutdown timer
-func (p *Proxy) setupIdleShutdown() {
-	// Never scale to 0
-	if p.proxyOrdinal == 0 {
-		return
-	}
-
-	p.resetIdleShutdown()
-
-	// Waits for the idle shutdown timer to finish
-	go func() {
-		for {
-			if p.shouldDoIdleShutdown() {
-				state.IdleShutdown.Lock()
-
-				if p.shouldDoIdleShutdown() && p.scaleDown() {
-					// Not necessary, but this proxy is going to shutdown anyway
-					os.Exit(0)
-				}
-
-				state.IdleShutdown.Unlock()
-			}
-			time.Sleep(time.Second)
-		}
-	}()
-}
-
 // Starts a watcher for modifications to the StatefulSet and pods
 func (p *Proxy) startWatcher() {
 	config, err := rest.InClusterConfig()
@@ -229,81 +202,31 @@ func (p *Proxy) startWatcher() {
 	}()
 }
 
-func (p *Proxy) cacheRetries() {
-	for {
-		p.retriesToCacheMux.Lock()
-		if len(p.retriesToCache) > 0 {
-			p.logger.Debug("Storing entries in retry cache.")
-			if err := utils.Retry(func() error {
-				if err := p.retryCache.Add(p.retriesToCache...); err != nil {
-					p.logger.Error("Failed to add entries in retry cache.", zap.Error(err))
-					return err
+// Sets up the idle shutdown timer
+func (p *Proxy) setupIdleShutdown() {
+	// Never scale to 0
+	if p.proxyOrdinal == 0 {
+		return
+	}
+
+	p.resetIdleShutdown()
+
+	// Waits for the idle shutdown timer to finish
+	go func() {
+		for {
+			if p.shouldDoIdleShutdown() {
+				state.IdleShutdown.Lock()
+
+				if p.shouldDoIdleShutdown() && p.scaleDown() {
+					// Not necessary, but this proxy is going to shutdown anyway
+					os.Exit(0)
 				}
-				return nil
-			}, 5, time.Second); err != nil {
-				p.logger.Error("Exhausted all attempts to add entries to retry cache.", zap.Error(err))
+
+				state.IdleShutdown.Unlock()
 			}
-			p.retriesToCache = nil
+			time.Sleep(time.Second)
 		}
-		p.retriesToCacheMux.Unlock()
-		time.Sleep(time.Second)
-	}
-}
-
-func (p *Proxy) addRetry(newRetry RetryEntry) {
-	// Initial retries we occur after 5 seconds
-	sleepDuration := 5 * time.Second
-	newRetry.NextRetryTime = time.Now().UTC().Add(sleepDuration).Unix()
-	newRetry.Retries++
-
-	p.logger.Debug("Adding event to retry queue.",
-		zap.String("requestId", newRetry.MsgKey.RequestId),
-		zap.String("notificationId", newRetry.MsgKey.NotificationId),
-		zap.Duration("sleepDuration", sleepDuration),
-		zap.Int64("nextRetryTime", newRetry.NextRetryTime))
-
-	if buf, err := json.Marshal(&newRetry); err != nil {
-		p.logger.Error("Failed to marshal initial retry entry.", zap.Any("entry", newRetry))
-	} else {
-		// Update the entries to add to the retry cache with the next retry time as score and then add the key with
-		// buffer as the member to be retried
-		p.retriesToCacheMux.Lock()
-		p.retriesToCache = append(p.retriesToCache, newRetry.NextRetryTime)
-		p.retriesToCache = append(p.retriesToCache, buf)
-		p.retriesToCacheMux.Unlock()
-	}
-}
-
-func (p *Proxy) updateRetry(updateRetry RetryEntry) {
-	// After an initial retry, triggers will be retried using exponential backoff with a sleep coefficient of 1 second
-	sleepDuration := utils.ExponentialBackOffFromRetryCount(updateRetry.Retries, time.Second)
-	nextRetryTime := time.Now().UTC().Add(sleepDuration)
-
-	if nextRetryTime.Sub(time.Unix(updateRetry.Origination, 0)).Seconds() < p.retryTimeToLive.Seconds() {
-		updateRetry.NextRetryTime = nextRetryTime.Unix()
-		updateRetry.Retries++
-
-		p.logger.Debug("Previous retry failed, adding event back to retry queue.",
-			zap.String("requestId", updateRetry.MsgKey.RequestId),
-			zap.String("notificationId", updateRetry.MsgKey.NotificationId),
-			zap.Duration("sleepDuration", sleepDuration),
-			zap.Int64("nextRetryTime", updateRetry.NextRetryTime))
-
-		if buf, err := json.Marshal(&updateRetry); err != nil {
-			p.logger.Error("Failed to marshal updated retry entry.", zap.Any("entry", updateRetry))
-		} else {
-			// Update the entries to add to the retry cache with the next retry time as score and then add the key with
-			// buffer as the member to be retried
-			p.retriesToCacheMux.Lock()
-			p.retriesToCache = append(p.retriesToCache, updateRetry.NextRetryTime)
-			p.retriesToCache = append(p.retriesToCache, buf)
-			p.retriesToCacheMux.Unlock()
-		}
-	} else {
-		p.logger.Error("Max retry time exceeded, dropping trigger.",
-			zap.String("requestId", updateRetry.MsgKey.RequestId),
-			zap.String("notificationId", updateRetry.MsgKey.NotificationId))
-	}
+	}()
 }
 
 // Proxy's HTTP handler
@@ -353,6 +276,34 @@ func (p *Proxy) httpHandler(w http.ResponseWriter, r *http.Request) {
 	// Read the body to copy it
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
+		p.logger.Error("Failed to read request body.",
+			zap.String("url", forwardTo),
+			zap.Error(err))
+
+		atomic.AddInt64(&state.ActiveRequests, -1)
+		p.writeProxyMetrics(w, http.StatusInternalServerError)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	var cosPayload CosPayload
+	if err := json.Unmarshal(body, &cosPayload); err != nil {
+		p.logger.Error("Failed to unmarshal payload.",
+			zap.String("url", forwardTo),
+			zap.Error(err))
+
+		atomic.AddInt64(&state.ActiveRequests, -1)
+		p.writeProxyMetrics(w, http.StatusInternalServerError)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	retryEntry, cosMsgKey, err := p.createRetryEntry(r, cosPayload.Notification)
+	if err != nil {
+		p.logger.Error("Failed to create retry entry.",
+			zap.String("url", forwardTo),
+			zap.Error(err))
+
 		atomic.AddInt64(&state.ActiveRequests, -1)
 		p.writeProxyMetrics(w, http.StatusInternalServerError)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -362,6 +313,10 @@ func (p *Proxy) httpHandler(w http.ResponseWriter, r *http.Request) {
 	// Create the proxy request
 	proxyRequest, err := http.NewRequest(r.Method, forwardTo, bytes.NewReader(body))
 	if err != nil {
+		p.logger.Error("Failed to create proxy request.",
+			zap.String("url", forwardTo),
+			zap.Error(err))
+
 		atomic.AddInt64(&state.ActiveRequests, -1)
 		p.writeProxyMetrics(w, http.StatusInternalServerError)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -371,8 +326,175 @@ func (p *Proxy) httpHandler(w http.ResponseWriter, r *http.Request) {
 	// Copy the headers
 	proxyRequest.Header = r.Header
 
-	// Do the actual request
-	p.doAsyncProxyRequest(w, proxyRequest, strings.ToLower(strings.TrimSpace(r.Header.Get("Insecure-Skip-Verify"))) == "true")
+	// Start the request
+	go func() {
+		defer func() {
+			// Restart the timer
+			p.resetIdleShutdown()
+
+			// Decrement the current number of active requests
+			atomic.AddInt64(&state.ActiveRequests, -1)
+		}()
+
+		//post event message to COS adapter
+		res, body, err := p.doRequest(proxyRequest)
+		if err != nil {
+			p.logger.Debug("COS adapter post error.",
+				zap.String("notificationId", cosMsgKey.NotificationId),
+				zap.String("recipient", retryEntry.Recipient),
+				zap.String("requestId", cosMsgKey.RequestId),
+				zap.Int("retries", retryEntry.Retries),
+				zap.Error(err))
+		} else if shouldRetry(res.StatusCode) {
+			p.logAdapterResponse(false, retryEntry, cosMsgKey, string(body), res.StatusCode)
+			if retryEntry.Retries > 0 {
+				go p.updateRetry(retryEntry, cosMsgKey)
+			} else {
+				go p.addRetry(retryEntry, cosMsgKey)
+			}
+		} else if res.StatusCode != http.StatusOK {
+			p.logAdapterResponse(true, retryEntry, cosMsgKey, string(body), res.StatusCode)
+		}
+	}()
+
+	p.writeProxyMetrics(w, http.StatusAccepted)
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (p *Proxy) createRetryEntry(r *http.Request, cosPayload []byte) (*RetryEntry, *CosMsgKey, error) {
+	retries, err := strconv.Atoi(r.Header.Get("Retries"))
+	if err != nil {
+		p.logger.Error("Error parsing Retries header.", zap.Error(err))
+		return nil, nil, err
+	}
+	origination, err := strconv.ParseInt(r.Header.Get("Origination"), 10, 64)
+	if err != nil {
+		p.logger.Error("Error parsing Origination header.", zap.Error(err))
+		return nil, nil, err
+	}
+	recipient := r.Header.Get("Recipient")
+	notificationId := r.Header.Get("NotificationId")
+	requestId := r.Header.Get("RequestId")
+	cosMsgKey := CosMsgKey{Format: "2.0", RequestId: requestId, NotificationId: notificationId, Recipients: []string{recipient}}
+
+	msgKey, err := json.Marshal(&cosMsgKey)
+	if err != nil {
+		p.logger.Error("Error marshaling COS msg key.", zap.Error(err))
+		return nil, nil, err
+	}
+	retryEntry := RetryEntry{MsgKey: msgKey, MsgValue: cosPayload, Recipient: recipient, Origination: origination, Retries: retries}
+
+	return &retryEntry, &cosMsgKey, nil
+}
+
+func (p *Proxy) cacheRetries() {
+	for {
+		p.retriesToCacheMux.Lock()
+		if len(p.retriesToCache) > 0 {
+			p.logger.Debug("Storing entries in retry cache.")
+			if err := utils.Retry(func() error {
+				if err := p.retryCache.Add(p.retriesToCache...); err != nil {
+					p.logger.Error("Failed to add entries in retry cache.", zap.Error(err))
+					return err
+				}
+				return nil
+			}, 5, time.Second); err != nil {
+				p.logger.Error("Exhausted all attempts to add entries to retry cache.", zap.Error(err))
+			}
+			p.retriesToCache = nil
+		}
+		p.retriesToCacheMux.Unlock()
+		time.Sleep(time.Second)
+	}
+}
+
+func (p *Proxy) addRetry(newRetry *RetryEntry, cosMsgKey *CosMsgKey) {
+	// Initial retries we occur after 5 seconds
+	sleepDuration := 5 * time.Second
+	newRetry.NextRetryTime = time.Now().UTC().Add(sleepDuration).Unix()
+	newRetry.Retries++
+
+	p.logger.Debug("Adding event to retry queue.",
+		zap.String("requestId", cosMsgKey.RequestId),
+		zap.String("notificationId", cosMsgKey.NotificationId),
+		zap.Duration("sleepDuration", sleepDuration),
+		zap.Int64("nextRetryTime", newRetry.NextRetryTime))
+
+	if buf, err := json.Marshal(&newRetry); err != nil {
+		p.logger.Error("Failed to marshal initial retry entry.", zap.Any("entry", newRetry))
+	} else {
+		// Update the entries to add to the retry cache with the next retry time as score and then add the key with
+		// buffer as the member to be retried
+		p.retriesToCacheMux.Lock()
+		p.retriesToCache = append(p.retriesToCache, newRetry.NextRetryTime)
+		p.retriesToCache = append(p.retriesToCache, buf)
+		p.retriesToCacheMux.Unlock()
+	}
+}
+
+func (p *Proxy) updateRetry(updateRetry *RetryEntry, cosMsgKey *CosMsgKey) {
+	// After an initial retry, triggers will be retried using exponential backoff with a sleep coefficient of 1 second
+	sleepDuration := utils.ExponentialBackOffFromRetryCount(updateRetry.Retries, time.Second)
+	nextRetryTime := time.Now().UTC().Add(sleepDuration)
+
+	if nextRetryTime.Sub(time.Unix(updateRetry.Origination, 0)).Seconds() < p.retryTimeToLive.Seconds() {
+		updateRetry.NextRetryTime = nextRetryTime.Unix()
+		updateRetry.Retries++
+
+		p.logger.Debug("Previous retry failed, adding event back to retry queue.",
+			zap.String("requestId", cosMsgKey.RequestId),
+			zap.String("notificationId", cosMsgKey.NotificationId),
+			zap.Duration("sleepDuration", sleepDuration),
+			zap.Int64("nextRetryTime", updateRetry.NextRetryTime))
+
+		if buf, err := json.Marshal(&updateRetry); err != nil {
+			p.logger.Error("Failed to marshal updated retry entry.", zap.Any("entry", updateRetry))
+		} else {
+			// Update the entries to add to the retry cache with the next retry time as score and then add the key with
+			// buffer as the member to be retried
+			p.retriesToCacheMux.Lock()
+			p.retriesToCache = append(p.retriesToCache, updateRetry.NextRetryTime)
+			p.retriesToCache = append(p.retriesToCache, buf)
+			p.retriesToCacheMux.Unlock()
+		}
+	} else {
+		p.logger.Error("Max retry time exceeded, dropping event.",
+			zap.String("requestId", cosMsgKey.RequestId),
+			zap.String("notificationId", cosMsgKey.NotificationId))
+	}
+}
+
+func (p *Proxy) doRequest(req *http.Request) (*http.Response, []byte, error) {
+	res, err := p.httpClient.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	defer res.Body.Close()
+
+	body, err := ioutil.ReadAll(res.Body)
+
+	return res, body, err
+}
+
+func (p *Proxy) logAdapterResponse(isError bool, retryEntry *RetryEntry, cosMsgKey *CosMsgKey, reason string, statusCode int) {
+	if isError {
+		p.logger.Error("COS adapter response failure code.",
+			zap.String("reason", reason),
+			zap.Int("statusCode", statusCode),
+			zap.String("notificationId", cosMsgKey.NotificationId),
+			zap.String("recipient", retryEntry.Recipient),
+			zap.String("requestId", cosMsgKey.RequestId),
+			zap.Int("retries", retryEntry.Retries))
+	} else {
+		p.logger.Debug("COS adapter response retry code.",
+			zap.String("reason", reason),
+			zap.Int("statusCode", statusCode),
+			zap.String("notificationId", cosMsgKey.NotificationId),
+			zap.String("recipient", retryEntry.Recipient),
+			zap.String("requestId", cosMsgKey.RequestId),
+			zap.Int("retries", retryEntry.Retries))
+	}
 }
 
 // Handles an ensure request if it exists, returns false if none exists
@@ -406,38 +528,6 @@ func (p *Proxy) handleEnsureRequest(w http.ResponseWriter, r *http.Request) bool
 
 	p.writeProxyMetrics(w, http.StatusOK)
 	return true
-}
-
-// Does an async proxy request and returns the status code if returned before the timeout
-func (p *Proxy) doAsyncProxyRequest(w http.ResponseWriter, proxyRequest *http.Request, insecureSkipVerify bool) {
-	// Start the request
-	go func() {
-		defer func() {
-			// Restart the timer
-			p.resetIdleShutdown()
-
-			// Decrement the current number of active requests
-			atomic.AddInt64(&state.ActiveRequests, -1)
-		}()
-
-		p.doRequest(proxyRequest)
-	}()
-
-	p.writeProxyMetrics(w, http.StatusAccepted)
-	w.WriteHeader(http.StatusAccepted)
-}
-
-func (p *Proxy) doRequest(req *http.Request) (*http.Response, []byte, error) {
-	res, err := p.httpClient.Do(req)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	defer res.Body.Close()
-
-	body, err := ioutil.ReadAll(res.Body)
-
-	return res, body, err
 }
 
 // Changes the StatefulSet replica count
@@ -786,4 +876,12 @@ func getProxyOrdinal(podName string, proxyStatefulSet string) int64 {
 	}
 
 	return int64(value)
+}
+
+func shouldRetry(statusCode int) bool {
+	return statusCode == http.StatusTooManyRequests ||
+		statusCode == http.StatusInternalServerError ||
+		statusCode == http.StatusBadGateway ||
+		statusCode == http.StatusServiceUnavailable ||
+		statusCode == http.StatusGatewayTimeout
 }
