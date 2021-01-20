@@ -11,6 +11,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -273,11 +274,19 @@ func (p *Proxy) httpHandler(w http.ResponseWriter, r *http.Request) {
 	// Delete the Forward-To header for when we copy the request to proxy it
 	r.Header.Del("Forward-To")
 
+	adapterURL, err := url.Parse(forwardTo)
+	if err != nil {
+		p.logger.Error("Failed to parse adapter URL.",
+			zap.String("url", forwardTo),
+			zap.Error(err))
+	}
+	name := adapterURL.Path
+
 	// Read the body to copy it
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		p.logger.Error("Failed to read request body.",
-			zap.String("url", forwardTo),
+			zap.String("name", name),
 			zap.Error(err))
 
 		atomic.AddInt64(&state.ActiveRequests, -1)
@@ -289,7 +298,7 @@ func (p *Proxy) httpHandler(w http.ResponseWriter, r *http.Request) {
 	var cosPayload CosPayload
 	if err := json.Unmarshal(body, &cosPayload); err != nil {
 		p.logger.Error("Failed to unmarshal payload.",
-			zap.String("url", forwardTo),
+			zap.String("name", name),
 			zap.Error(err))
 
 		atomic.AddInt64(&state.ActiveRequests, -1)
@@ -301,7 +310,7 @@ func (p *Proxy) httpHandler(w http.ResponseWriter, r *http.Request) {
 	retryEntry, cosMsgKey, err := p.createRetryEntry(r, cosPayload.Notification)
 	if err != nil {
 		p.logger.Error("Failed to create retry entry.",
-			zap.String("url", forwardTo),
+			zap.String("name", name),
 			zap.Error(err))
 
 		atomic.AddInt64(&state.ActiveRequests, -1)
@@ -314,7 +323,7 @@ func (p *Proxy) httpHandler(w http.ResponseWriter, r *http.Request) {
 	proxyRequest, err := http.NewRequest(r.Method, forwardTo, bytes.NewReader(body))
 	if err != nil {
 		p.logger.Error("Failed to create proxy request.",
-			zap.String("url", forwardTo),
+			zap.String("name", name),
 			zap.Error(err))
 
 		atomic.AddInt64(&state.ActiveRequests, -1)
@@ -337,6 +346,7 @@ func (p *Proxy) httpHandler(w http.ResponseWriter, r *http.Request) {
 		}()
 
 		p.logger.Debug("Sending event to adapter...",
+			zap.String("name", name),
 			zap.String("notificationId", cosMsgKey.NotificationId),
 			zap.String("recipient", retryEntry.Recipient),
 			zap.String("requestId", cosMsgKey.RequestId))
@@ -345,19 +355,20 @@ func (p *Proxy) httpHandler(w http.ResponseWriter, r *http.Request) {
 		res, body, err := p.doRequest(proxyRequest)
 		if err != nil {
 			p.logger.Error("COS adapter post error.",
+				zap.String("name", name),
 				zap.String("notificationId", cosMsgKey.NotificationId),
 				zap.String("recipient", retryEntry.Recipient),
 				zap.String("requestId", cosMsgKey.RequestId),
 				zap.Error(err))
 		} else if shouldRetry(res.StatusCode) {
-			p.logAdapterResponse(false, retryEntry, cosMsgKey, string(body), res.StatusCode)
+			p.logAdapterResponse(false, retryEntry, cosMsgKey, name, string(body), res.StatusCode)
 			if retryEntry.Retries > 0 {
 				go p.updateRetry(retryEntry, cosMsgKey)
 			} else {
 				go p.addRetry(retryEntry, cosMsgKey)
 			}
 		} else if res.StatusCode != http.StatusOK {
-			p.logAdapterResponse(true, retryEntry, cosMsgKey, string(body), res.StatusCode)
+			p.logAdapterResponse(true, retryEntry, cosMsgKey, name, string(body), res.StatusCode)
 		}
 	}()
 
@@ -481,9 +492,10 @@ func (p *Proxy) doRequest(req *http.Request) (*http.Response, []byte, error) {
 	return res, body, err
 }
 
-func (p *Proxy) logAdapterResponse(isError bool, retryEntry *RetryEntry, cosMsgKey *CosMsgKey, reason string, statusCode int) {
+func (p *Proxy) logAdapterResponse(isError bool, retryEntry *RetryEntry, cosMsgKey *CosMsgKey, name string, reason string, statusCode int) {
 	if isError {
 		p.logger.Error("COS adapter response failure code.",
+			zap.String("name", name),
 			zap.String("reason", reason),
 			zap.Int("statusCode", statusCode),
 			zap.String("notificationId", cosMsgKey.NotificationId),
@@ -491,6 +503,7 @@ func (p *Proxy) logAdapterResponse(isError bool, retryEntry *RetryEntry, cosMsgK
 			zap.String("requestId", cosMsgKey.RequestId))
 	} else {
 		p.logger.Debug("COS adapter response retry code.",
+			zap.String("name", name),
 			zap.String("reason", reason),
 			zap.Int("statusCode", statusCode),
 			zap.String("notificationId", cosMsgKey.NotificationId),
