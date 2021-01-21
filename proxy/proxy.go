@@ -363,9 +363,9 @@ func (p *Proxy) httpHandler(w http.ResponseWriter, r *http.Request) {
 		} else if shouldRetry(res.StatusCode) {
 			p.logAdapterResponse(false, retryEntry, cosMsgKey, name, string(body), res.StatusCode)
 			if retryEntry.Retries > 0 {
-				go p.updateRetry(retryEntry, cosMsgKey)
+				go p.updateRetry(retryEntry, cosMsgKey, name)
 			} else {
-				go p.addRetry(retryEntry, cosMsgKey)
+				go p.addRetry(retryEntry, cosMsgKey, name)
 			}
 		} else if res.StatusCode != http.StatusOK {
 			p.logAdapterResponse(true, retryEntry, cosMsgKey, name, string(body), res.StatusCode)
@@ -423,13 +423,15 @@ func (p *Proxy) cacheRetries() {
 	}
 }
 
-func (p *Proxy) addRetry(newRetry *RetryEntry, cosMsgKey *CosMsgKey) {
+func (p *Proxy) addRetry(newRetry *RetryEntry, cosMsgKey *CosMsgKey, name string) {
 	// Initial retries we occur after 5 seconds
 	sleepDuration := 5 * time.Second
 	newRetry.NextRetryTime = time.Now().UTC().Add(sleepDuration).Unix()
 	newRetry.Retries++
 
 	p.logger.Debug("Adding event to retry queue.",
+		zap.String("name", name),
+		zap.String("recipient", newRetry.Recipient),
 		zap.String("requestId", cosMsgKey.RequestId),
 		zap.String("notificationId", cosMsgKey.NotificationId),
 		zap.Duration("sleepDuration", sleepDuration),
@@ -447,7 +449,7 @@ func (p *Proxy) addRetry(newRetry *RetryEntry, cosMsgKey *CosMsgKey) {
 	}
 }
 
-func (p *Proxy) updateRetry(updateRetry *RetryEntry, cosMsgKey *CosMsgKey) {
+func (p *Proxy) updateRetry(updateRetry *RetryEntry, cosMsgKey *CosMsgKey, name string) {
 	// After an initial retry, triggers will be retried using exponential backoff with a sleep coefficient of 1 second
 	sleepDuration := utils.ExponentialBackOffFromRetryCount(updateRetry.Retries, time.Second)
 	nextRetryTime := time.Now().UTC().Add(sleepDuration)
@@ -457,6 +459,8 @@ func (p *Proxy) updateRetry(updateRetry *RetryEntry, cosMsgKey *CosMsgKey) {
 		updateRetry.Retries++
 
 		p.logger.Debug("Previous retry failed, adding event back to retry queue.",
+			zap.String("name", name),
+			zap.String("recipient", updateRetry.Recipient),
 			zap.String("requestId", cosMsgKey.RequestId),
 			zap.String("notificationId", cosMsgKey.NotificationId),
 			zap.Duration("sleepDuration", sleepDuration),
@@ -474,6 +478,8 @@ func (p *Proxy) updateRetry(updateRetry *RetryEntry, cosMsgKey *CosMsgKey) {
 		}
 	} else {
 		p.logger.Error("Max retry time exceeded, dropping event.",
+			zap.String("name", name),
+			zap.String("recipient", updateRetry.Recipient),
 			zap.String("requestId", cosMsgKey.RequestId),
 			zap.String("notificationId", cosMsgKey.NotificationId))
 	}
