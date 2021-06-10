@@ -144,7 +144,7 @@ func NewProxy(retryCache RetryCache) (*Proxy, error) {
 	return proxy, nil
 }
 
-// Starts the HTTP server
+// StartProxy starts the HTTP server
 func (p *Proxy) StartProxy() error {
 	p.startWatcher()
 	p.setupIdleShutdown()
