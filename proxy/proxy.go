@@ -363,7 +363,15 @@ func (p *Proxy) httpHandler(w http.ResponseWriter, r *http.Request) {
 					zap.Int("retries", retryEntry.Retries),
 					zap.Error(err))
 			} else {
-				p.logAdapterResponse(false, retryEntry, cosMsgKey, name, string(body), res.StatusCode)
+				p.logger.Warn("COS adapter response retry code.",
+					zap.String("name", name),
+					zap.String("reason", string(body)),
+					zap.Int("statusCode", res.StatusCode),
+					zap.String("notificationId", cosMsgKey.NotificationId),
+					zap.String("recipient", retryEntry.Recipient),
+					zap.String("requestId", cosMsgKey.RequestId),
+					zap.Int("retries", retryEntry.Retries),
+					zap.Any("headers", res.Header))
 			}
 			if retryEntry.Retries > 0 {
 				go p.updateRetry(retryEntry, cosMsgKey, name)
@@ -371,7 +379,14 @@ func (p *Proxy) httpHandler(w http.ResponseWriter, r *http.Request) {
 				go p.addRetry(retryEntry, cosMsgKey, name)
 			}
 		} else if res.StatusCode != http.StatusOK {
-			p.logAdapterResponse(true, retryEntry, cosMsgKey, name, string(body), res.StatusCode)
+			p.logger.Error("COS adapter response failure code.",
+				zap.String("name", name),
+				zap.String("reason", string(body)),
+				zap.Int("statusCode", res.StatusCode),
+				zap.String("notificationId", cosMsgKey.NotificationId),
+				zap.String("recipient", retryEntry.Recipient),
+				zap.String("requestId", cosMsgKey.RequestId),
+				zap.Any("headers", res.Header))
 		}
 	}()
 
@@ -499,27 +514,6 @@ func (p *Proxy) doRequest(req *http.Request) (*http.Response, []byte, error) {
 	body, err := ioutil.ReadAll(res.Body)
 
 	return res, body, err
-}
-
-func (p *Proxy) logAdapterResponse(isError bool, retryEntry *RetryEntry, cosMsgKey *CosMsgKey, name string, reason string, statusCode int) {
-	if isError {
-		p.logger.Error("COS adapter response failure code.",
-			zap.String("name", name),
-			zap.String("reason", reason),
-			zap.Int("statusCode", statusCode),
-			zap.String("notificationId", cosMsgKey.NotificationId),
-			zap.String("recipient", retryEntry.Recipient),
-			zap.String("requestId", cosMsgKey.RequestId))
-	} else {
-		p.logger.Warn("COS adapter response retry code.",
-			zap.String("name", name),
-			zap.String("reason", reason),
-			zap.Int("statusCode", statusCode),
-			zap.String("notificationId", cosMsgKey.NotificationId),
-			zap.String("recipient", retryEntry.Recipient),
-			zap.String("requestId", cosMsgKey.RequestId),
-			zap.Int("retries", retryEntry.Retries))
-	}
 }
 
 // Handles an ensure request if it exists, returns false if none exists
