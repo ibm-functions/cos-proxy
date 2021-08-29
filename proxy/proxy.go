@@ -353,7 +353,7 @@ func (p *Proxy) httpHandler(w http.ResponseWriter, r *http.Request) {
 
 		//post event message to COS adapter
 		res, body, err := p.doRequest(proxyRequest)
-		if err != nil || shouldRetry(res.StatusCode) {
+		if err != nil || shouldRetry(res.StatusCode, res.Header) {
 			if err != nil {
 				p.logger.Warn("COS adapter request error.",
 					zap.String("name", name),
@@ -897,8 +897,11 @@ func getProxyOrdinal(podName string, proxyStatefulSet string) int64 {
 	return int64(value)
 }
 
-func shouldRetry(statusCode int) bool {
-	return statusCode == http.StatusTooManyRequests ||
+func shouldRetry(statusCode int, header http.Header) bool {
+	_, headerExists := header["COS-Adapter-Served"]
+
+	return (statusCode == http.StatusNotFound && !headerExists) ||
+		statusCode == http.StatusTooManyRequests ||
 		statusCode == http.StatusInternalServerError ||
 		statusCode == http.StatusBadGateway ||
 		statusCode == http.StatusServiceUnavailable ||
